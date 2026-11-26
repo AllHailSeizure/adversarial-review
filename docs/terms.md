@@ -1,31 +1,65 @@
 ---
 layout: default
-title: Terms of Service
+title: Adversarial Review - Terms of Service
 permalink: /terms/
 ---
 
-# Terms of Service
+# Adversarial Review - Terms of Service
 
-**Effective Date:** YYYY-MM-DD
+**Effective Date:** July 4, 2026
 
-> **Template Placeholder:** Replace `<APP_NAME>` and customize sections below before submitting to the Reddit Developer Portal.
+## Overview
+
+Adversarial Review is a Devvit application that assists subreddit communities in reviewing and providing structured feedback on academic papers. These Terms of Service govern your use of the application.
 
 ## 1. Acceptance of Terms
 
-By installing or using **\<APP_NAME\>**, you agree to these Terms of Service and to Reddit's Terms of Service and Devvit Developer Terms.
+By installing and using Adversarial Review, you agree to these Terms of Service. If you do not agree to any part of these terms, do not use this application.
 
-## 2. Permitted Use
+## 2. License and Use
 
-\<APP_NAME\> is provided for subreddit moderation and community workflows inside subreddits where a moderator has installed it. You agree not to misuse the app or bypass subreddit rules or Reddit platform policies.
+Adversarial Review grants you a limited, non-exclusive, non-transferable license to use the application for peer-reviewing papers in your subreddit. You agree not to:
 
-## 3. No Warranty & Limitation of Liability
+- Reverse engineer, decompile, or attempt to derive the source code
+- Use the application outside your subreddit(s)
+- Sublicense, sell, or transfer the application
+- Remove or alter proprietary notices or attributions
 
-\<APP_NAME\> is provided "as is" without warranties of any kind. To the fullest extent permitted by law, the maintainers are not liable for any indirect, incidental, or consequential damages arising from use of the app.
+## 3. Academic Integrity
 
-## 4. Termination
+You agree to:
 
-Maintainers may discontinue or restrict access to \<APP_NAME\> at any time, and subreddit moderators may uninstall the app at any time.
+- Use Adversarial Review to provide honest, constructive feedback on papers
+- Not use the application to harass, defame, or abuse authors
+- Comply with academic ethics standards and your subreddit's community guidelines
+- Respect the intellectual property of authors and their work
 
-## 5. Contact
+The application is designed to support peer review; you remain responsible for the content and tone of all feedback you provide.
 
-For questions regarding these terms, contact the subreddit moderators or open an issue on this repository.
+## 4. Compliance with Reddit Policies
+
+Adversarial Review is subject to Reddit's Terms of Service and Devvit platform requirements. You agree to use the application only in compliance with these policies and your subreddit's rules.
+
+## 5. No Warranty
+
+Adversarial Review is provided "as is" without warranty of any kind, express or implied. We do not warrant that the application will be error-free, uninterrupted, or meet your specific review needs.
+
+## 6. Limitation of Liability
+
+To the fullest extent permitted by law, we shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of Adversarial Review, including disputes over review content or academic outcomes.
+
+## 7. Termination
+
+We reserve the right to disable or terminate access to Adversarial Review at any time, for any reason, including violation of these terms or Reddit's policies.
+
+## 8. Changes to Terms
+
+We may modify these Terms of Service at any time. Continued use of the application constitutes acceptance of updated terms.
+
+## 9. Contact
+
+For questions regarding these terms, contact us through the subreddit where Adversarial Review is installed.
+
+---
+
+*These Terms of Service are subject to Reddit's standard policies and Devvit platform requirements.*

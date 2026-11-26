@@ -1,15 +1,16 @@
 {
-  "name": "devvit-app-template",
-  "version": "0.1.0",
+  "name": "adversarial-review",
+  "version": "1.0.0",
   "private": true,
   "license": "MIT",
   "scripts": {
-    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:supabase && npm run build",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:supabase": "node supabase/functions/process-review/url-resolution.test.mjs && node supabase/functions/process-review/resolve-guard.test.mjs",
     "test:watch": "vitest",
     "build": "vite build",
     "dev": "devvit playtest"
