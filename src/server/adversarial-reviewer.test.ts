@@ -1,80 +1,82 @@
 import { describe, expect, it, vi } from 'vitest';
-import { reddit, redis } from '@devvit/web/server';
+import { redis } from '@devvit/web/server';
 import type { MenuItemRequest, T3, UiResponse } from '@devvit/web/shared';
 import { createApp } from './app';
 import { collectPostUrls, extractAllBodyUrls, formatSignature } from './adversarial-reviewer';
-import { createModTest, type FakeRedditWorld } from './test-harness';
+import {
+  createModTest,
+  expectAllEndpointsCovered,
+  type FakeHttp,
+  type FakeRedditWorld,
+  type ScenarioRunner,
+} from './test-harness';
 
 // ─── Fake Reddit + Supabase ───────────────────────────────────────────────────
 
-const SUPABASE = 'https://supabase.test';
+const SUPABASE_HOST = 'eimdgqymjwfljtapnuyl.supabase.co';
+const SUPABASE = `https://${SUPABASE_HOST}`;
 const PENDING_JOBS_KEY = 'bot:adversarial:pdfjobs';
 const RETRY_QUEUE_KEY = 'bot:adversarial:retry-queue';
+/** The requesting user in these tests. */
+const REQUESTER = 'alice';
 
 type FakePost = {
   id: T3;
   title: string;
   selftext?: string;
   url?: string;
-  subredditName?: string;
   removed?: boolean;
   spam?: boolean;
   flair?: { templateId?: string };
 };
 
-type FetchCall = { url: string; method: string; body: unknown };
 type JobRow = { status: string; result: string | null; error: string | null };
 
 /**
- * Per-test fake for the Reddit calls `@devvit/test` leaves unimplemented
- * (getPostById details, getCurrentUser, getModerators) and for the Supabase
- * REST API, reached through a spied `fetch`. No network or Reddit login.
+ * Seeds the requester (optionally a moderator) and fakes the Supabase REST API
+ * on its declared domain: POST /rest/v1/review_jobs (configurable status),
+ * GET review_jobs?post_id=eq.<id>, and bot_logs writes.
  */
-function installReviewWorld(world: FakeRedditWorld, opts: { isMod?: boolean } = {}) {
-  const posts = new Map<string, FakePost>();
-  const calls: FetchCall[] = [];
+function installReviewWorld(
+  world: FakeRedditWorld,
+  http: FakeHttp,
+  opts: { isMod?: boolean } = {}
+) {
   const jobs = new Map<string, JobRow>();
   let submitStatus = 201;
+  if (opts.isMod) world.mod(REQUESTER);
+  else world.user(REQUESTER);
 
-  vi.spyOn(reddit, 'getPostById').mockImplementation((async (id: T3) => {
-    const post = posts.get(id);
-    if (!post) throw new Error(`no post ${id}`);
-    return {
-      ...post,
-      addComment: (options: { text: string }) => reddit.submitComment({ id: post.id, ...options }),
-    };
-  }) as unknown as typeof reddit.getPostById);
-
-  vi.spyOn(reddit, 'getCurrentUser').mockResolvedValue({
-    id: 't2_alice',
-    username: 'alice',
-  } as unknown as Awaited<ReturnType<typeof reddit.getCurrentUser>>);
-
-  vi.spyOn(reddit, 'getModerators').mockImplementation((() => ({
-    all: async () => (opts.isMod ? [{ username: 'alice' }] : []),
-  })) as unknown as typeof reddit.getModerators);
-
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-    const url = String(input);
-    const method = init?.method ?? 'GET';
-    const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
-    calls.push({ url, method, body });
-    if (!url.startsWith(SUPABASE)) throw new Error(`unexpected fetch ${url}`);
-    if (method === 'POST' && url.endsWith('/rest/v1/review_jobs')) {
-      return new Response(null, { status: submitStatus });
-    }
-    const match = /review_jobs\?post_id=eq\.([^&]+)/.exec(url);
-    if (method === 'GET' && match) {
-      const row = jobs.get(match[1]!);
-      return Response.json(row ? [row] : []);
-    }
-    return new Response(null, { status: 404 });
+  http.stub(SUPABASE_HOST, () => new Response(null, { status: 201 }), {
+    path: '/rest/v1/bot_logs',
   });
+  http.stub(SUPABASE_HOST, () => new Response(null, { status: submitStatus }), {
+    path: '/rest/v1/review_jobs',
+    method: 'POST',
+  });
+  http.stub(
+    SUPABASE_HOST,
+    (call) => {
+      const id = new URL(call.url).searchParams.get('post_id')?.replace(/^eq\./, '') ?? '';
+      const row = jobs.get(id);
+      return Response.json(row ? [row] : []);
+    },
+    { path: '/rest/v1/review_jobs', method: 'GET' }
+  );
 
   return {
     seed(post: FakePost) {
-      world.seedPost({ id: post.id, title: post.title, selftext: post.selftext });
-      posts.set(post.id, { subredditName: 'testsub', ...post });
+      const rec = world.seedPost({
+        id: post.id,
+        title: post.title,
+        selftext: post.selftext,
+        url: post.url ?? '',
+        author: REQUESTER,
+        flair: post.flair,
+        removed: post.removed,
+      });
+      if (post.spam) rec.spam = true;
+      if (post.removed) world.removedIds.add(post.id);
     },
     setJob(postId: string, row: JobRow) {
       jobs.set(postId, row);
@@ -82,7 +84,11 @@ function installReviewWorld(world: FakeRedditWorld, opts: { isMod?: boolean } = 
     failSubmissions(status: number) {
       submitStatus = status;
     },
-    submissions: () => calls.filter((c) => c.method === 'POST' && c.url.endsWith('/review_jobs')),
+    submissions: () =>
+      http
+        .callsTo(SUPABASE_HOST)
+        .filter((c) => c.method === 'POST' && c.path === '/rest/v1/review_jobs')
+        .map((c) => ({ url: c.url, method: c.method, body: c.json })),
   };
 }
 
@@ -97,8 +103,8 @@ const test = createModTest({
 });
 
 const request = (postId: T3): MenuItemRequest => ({ targetId: postId, location: 'post' });
-const menu = (runner: { menu: (s: string, r: unknown) => Promise<UiResponse> }, postId: T3) =>
-  runner.menu('adversarial-review', request(postId));
+const menu = (runner: ScenarioRunner, postId: T3) =>
+  runner.as(REQUESTER).menu('adversarial-review', request(postId));
 const toastText = (res: UiResponse): string | undefined =>
   typeof res.showToast === 'string' ? res.showToast : res.showToast?.text;
 const pendingIds = async () =>
@@ -141,9 +147,9 @@ describe('formatSignature', () => {
 // ─── Menu action ──────────────────────────────────────────────────────────────
 
 describe('menu: request adversarial review', () => {
-  test('is refused when the reviewer is disabled', async ({ world, runner, mocks }) => {
-    const fake = installReviewWorld(world);
-    mocks.settings.update({ adversarialReviewerEnabled: false });
+  test('is refused when the reviewer is disabled', async ({ world, http, runner, configure }) => {
+    const fake = installReviewWorld(world, http);
+    configure({ adversarialReviewerEnabled: false });
     fake.seed({ id: 't3_off', title: 'Theory', selftext: 'https://example.com/p.pdf' });
 
     const res = await menu(runner, 't3_off');
@@ -157,9 +163,10 @@ describe('menu: request adversarial review', () => {
 
   test('queues a Supabase job directly when the post has exactly one link', async ({
     world,
+    http,
     runner,
   }) => {
-    const fake = installReviewWorld(world);
+    const fake = installReviewWorld(world, http);
     fake.seed({
       id: 't3_one',
       title: 'My TOE',
@@ -184,8 +191,8 @@ describe('menu: request adversarial review', () => {
     expect(await redis.get('bot:adversarial:lock:t3_one')).toBe('1');
   });
 
-  test('treats a 409 (job already exists) as queued', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('treats a 409 (job already exists) as queued', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http);
     fake.failSubmissions(409);
     fake.seed({ id: 't3_dup', title: 'Dup', selftext: 'https://example.com/x.pdf' });
 
@@ -195,8 +202,8 @@ describe('menu: request adversarial review', () => {
     expect(await pendingIds()).toEqual(['t3_dup']);
   });
 
-  test('allows only one review per post', async ({ world, runner }) => {
-    const fake = installReviewWorld(world, { isMod: true });
+  test('allows only one review per post', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http, { isMod: true });
     fake.seed({ id: 't3_once', title: 'Once', selftext: 'https://example.com/x.pdf' });
 
     await menu(runner, 't3_once');
@@ -206,8 +213,8 @@ describe('menu: request adversarial review', () => {
     expect(fake.submissions()).toHaveLength(1);
   });
 
-  test('refuses removed posts and releases the post lock', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('refuses removed posts and releases the post lock', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http);
     fake.seed({ id: 't3_gone', title: 'Gone', selftext: '', removed: true });
 
     const res = await menu(runner, 't3_gone');
@@ -216,9 +223,14 @@ describe('menu: request adversarial review', () => {
     expect(await redis.get('bot:adversarial:lock:t3_gone')).toBeUndefined();
   });
 
-  test('enforces the required flair when one is configured', async ({ world, runner, mocks }) => {
-    const fake = installReviewWorld(world);
-    mocks.settings.update({ adversarialReviewerFlairId: 'flair-review' });
+  test('enforces the required flair when one is configured', async ({
+    world,
+    http,
+    runner,
+    configure,
+  }) => {
+    const fake = installReviewWorld(world, http);
+    configure({ adversarialReviewerFlairId: 'flair-review' });
     fake.seed({
       id: 't3_noflair',
       title: 'A',
@@ -240,8 +252,12 @@ describe('menu: request adversarial review', () => {
     expect(toastText(allowed)).toBe('Review request queued. Please wait.');
   });
 
-  test('limits non-moderators to one review request per UTC day', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('limits non-moderators to one review request per UTC day', async ({
+    world,
+    http,
+    runner,
+  }) => {
+    const fake = installReviewWorld(world, http);
     fake.seed({ id: 't3_q1', title: 'Q1', selftext: 'https://a.io' });
     fake.seed({ id: 't3_q2', title: 'Q2', selftext: 'https://b.io' });
 
@@ -254,8 +270,8 @@ describe('menu: request adversarial review', () => {
     expect(await redis.get(`bot:adversarial:user:t2_alice:${day}`)).toBe('1');
   });
 
-  test('exempts moderators from the daily quota', async ({ world, runner }) => {
-    const fake = installReviewWorld(world, { isMod: true });
+  test('exempts moderators from the daily quota', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http, { isMod: true });
     fake.seed({ id: 't3_m1', title: 'M1', selftext: 'https://a.io' });
     fake.seed({ id: 't3_m2', title: 'M2', selftext: 'https://b.io' });
 
@@ -265,8 +281,12 @@ describe('menu: request adversarial review', () => {
     expect(toastText(second)).toBe('Review request queued. Please wait.');
   });
 
-  test('falls back to the retry queue when Supabase rejects the job', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('falls back to the retry queue when Supabase rejects the job', async ({
+    world,
+    http,
+    runner,
+  }) => {
+    const fake = installReviewWorld(world, http);
     fake.failSubmissions(503);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     fake.seed({ id: 't3_down', title: 'Down', selftext: 'https://a.io/p.pdf' });
@@ -287,16 +307,17 @@ describe('menu: request adversarial review', () => {
 describe('forms', () => {
   test('no-link posts get a manuscript-URL form, then queue with the submitted URL', async ({
     world,
+    http,
     runner,
   }) => {
-    const fake = installReviewWorld(world);
+    const fake = installReviewWorld(world, http);
     fake.seed({ id: 't3_text', title: 'Text only', selftext: 'Pure prose.' });
 
     const res = await menu(runner, 't3_text');
     expect(res.showForm?.name).toBe('adversarial-no-link');
     expect(fake.submissions()).toHaveLength(0);
 
-    const submitted = await runner.form('adversarial-no-link', {
+    const submitted = await runner.as(REQUESTER).form('adversarial-no-link', {
       manuscriptUrl: '  https://zenodo.org/m.pdf  ',
     });
 
@@ -308,18 +329,22 @@ describe('forms', () => {
     expect(await redis.get('bot:adversarial:pending-form:t2_alice')).toBeUndefined();
   });
 
-  test('a blank no-link form reviews the post text only', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('a blank no-link form reviews the post text only', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http);
     fake.seed({ id: 't3_blank', title: 'Blank', selftext: 'Prose.' });
 
     await menu(runner, 't3_blank');
-    await runner.form('adversarial-no-link', { manuscriptUrl: '' });
+    await runner.as(REQUESTER).form('adversarial-no-link', { manuscriptUrl: '' });
 
     expect(fake.submissions()[0]?.body).toMatchObject({ post_id: 't3_blank', pdf_url: null });
   });
 
-  test('multi-link posts get a picker that includes Other and None', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('multi-link posts get a picker that includes Other and None', async ({
+    world,
+    http,
+    runner,
+  }) => {
+    const fake = installReviewWorld(world, http);
     fake.seed({ id: 't3_multi', title: 'Multi', selftext: 'https://a.io/1 https://b.io/2' });
 
     const res = await menu(runner, 't3_multi');
@@ -347,12 +372,13 @@ describe('forms', () => {
     test(`multi-link selection ${JSON.stringify(c.selectedUrl)} queues ${c.expected}`, async ({
       world,
       runner,
+      http,
     }) => {
-      const fake = installReviewWorld(world);
+      const fake = installReviewWorld(world, http);
       fake.seed({ id: 't3_pick', title: 'Pick', selftext: 'https://a.io/1 https://b.io/2' });
 
       await menu(runner, 't3_pick');
-      await runner.form('adversarial-multi-link', {
+      await runner.as(REQUESTER).form('adversarial-multi-link', {
         selectedUrl: c.selectedUrl,
         customUrl: c.customUrl,
       });
@@ -364,10 +390,16 @@ describe('forms', () => {
     });
   }
 
-  test('an expired form context is reported instead of queuing', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('an expired form context is reported instead of queuing', async ({
+    world,
+    http,
+    runner,
+  }) => {
+    const fake = installReviewWorld(world, http);
 
-    const res = await runner.form('adversarial-no-link', { manuscriptUrl: 'https://a.io' });
+    const res = await runner
+      .as(REQUESTER)
+      .form('adversarial-no-link', { manuscriptUrl: 'https://a.io' });
 
     expect(toastText(res)).toBe('Form expired. Please try again.');
     expect(fake.submissions()).toHaveLength(0);
@@ -377,23 +409,24 @@ describe('forms', () => {
 // ─── Scheduler: pdf-review-poll ───────────────────────────────────────────────
 
 describe('scheduler: pdf-review-poll', () => {
-  const poll = (runner: { postJson: <T>(p: string, b: unknown) => Promise<T> }) =>
-    runner.postJson<Record<string, unknown>>('/internal/scheduler/pdf-review-poll', {});
+  const poll = async (runner: { runTask: (name: string) => Promise<unknown> }) =>
+    (await runner.runTask('pdf-review-poll')) as Record<string, unknown>;
 
-  test('does nothing without Supabase config', async ({ world, runner, mocks }) => {
-    installReviewWorld(world);
-    mocks.settings.update({ supabaseUrl: '' });
+  test('does nothing without Supabase config', async ({ world, http, runner, configure }) => {
+    installReviewWorld(world, http);
+    configure({ supabaseUrl: '' });
 
     expect(await poll(runner)).toEqual({ status: 'no supabase config' });
   });
 
   test('posts a finished review with signature, distinguishes and locks it', async ({
     world,
+    http,
     runner,
-    mocks,
+    configure,
   }) => {
-    const fake = installReviewWorld(world);
-    mocks.settings.update({
+    const fake = installReviewWorld(world, http);
+    configure({
       adversarialReviewerLockComment: true,
       adversarialReviewerStickyComment: true,
     });
@@ -412,8 +445,8 @@ describe('scheduler: pdf-review-poll', () => {
     expect(await pendingIds()).toEqual([]);
   });
 
-  test('leaves queued/processing jobs pending', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('leaves queued/processing jobs pending', async ({ world, http, runner }) => {
+    const fake = installReviewWorld(world, http);
     await redis.zAdd(PENDING_JOBS_KEY, { score: Date.now(), member: 't3_wait' });
     fake.setJob('t3_wait', { status: 'processing', result: null, error: null });
 
@@ -425,9 +458,10 @@ describe('scheduler: pdf-review-poll', () => {
 
   test('drops failed jobs and releases the post lock so it can be re-requested', async ({
     world,
+    http,
     runner,
   }) => {
-    const fake = installReviewWorld(world);
+    const fake = installReviewWorld(world, http);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await redis.set('bot:adversarial:lock:t3_fail', '1');
     await redis.zAdd(PENDING_JOBS_KEY, { score: Date.now(), member: 't3_fail' });
@@ -439,8 +473,8 @@ describe('scheduler: pdf-review-poll', () => {
     expect(await redis.get('bot:adversarial:lock:t3_fail')).toBeUndefined();
   });
 
-  test('expires jobs older than one hour', async ({ world, runner }) => {
-    installReviewWorld(world);
+  test('expires jobs older than one hour', async ({ world, http, runner }) => {
+    installReviewWorld(world, http);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await redis.set('bot:adversarial:lock:t3_old', '1');
     await redis.zAdd(PENDING_JOBS_KEY, {
@@ -454,8 +488,12 @@ describe('scheduler: pdf-review-poll', () => {
     expect(await redis.get('bot:adversarial:lock:t3_old')).toBeUndefined();
   });
 
-  test('resubmits due retry-queue entries and moves them to pending', async ({ world, runner }) => {
-    const fake = installReviewWorld(world);
+  test('resubmits due retry-queue entries and moves them to pending', async ({
+    world,
+    http,
+    runner,
+  }) => {
+    const fake = installReviewWorld(world, http);
     const member = JSON.stringify({
       postId: 't3_retry',
       title: 'Retry',
@@ -476,9 +514,10 @@ describe('scheduler: pdf-review-poll', () => {
 
   test('backs off a still-failing retry with an incremented attempt count', async ({
     world,
+    http,
     runner,
   }) => {
-    const fake = installReviewWorld(world);
+    const fake = installReviewWorld(world, http);
     fake.failSubmissions(500);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const member = JSON.stringify({
@@ -506,9 +545,10 @@ describe('scheduler: pdf-review-poll', () => {
 
   test('gives up after the max retry attempts and releases the post lock', async ({
     world,
+    http,
     runner,
   }) => {
-    const fake = installReviewWorld(world);
+    const fake = installReviewWorld(world, http);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await redis.set('bot:adversarial:lock:t3_dead', '1');
     const member = JSON.stringify({
@@ -527,4 +567,39 @@ describe('scheduler: pdf-review-poll', () => {
     expect(await redis.zRange(RETRY_QUEUE_KEY, 0, -1)).toHaveLength(0);
     expect(await redis.get('bot:adversarial:lock:t3_dead')).toBeUndefined();
   });
+});
+
+describe('end to end', () => {
+  test('request from the post menu, worker finishes, the */5 poll posts the review', async ({
+    world,
+    http,
+    runner,
+    clock,
+  }) => {
+    const fake = installReviewWorld(world, http);
+    clock.set('2026-11-25T12:01:00Z');
+    await runner
+      .scenario('adversarial review round trip')
+      .given('alice has a post linking one manuscript', () =>
+        fake.seed({ id: 't3_e2e', title: 'TOE', selftext: 'https://example.com/toe.pdf' })
+      )
+      .when('alice requests a review from the post menu', ({ runner: r }) =>
+        r.as(REQUESTER).menu('adversarial-review', { location: 'post', targetId: 't3_e2e' })
+      )
+      .and('the Supabase worker finishes the job', () =>
+        fake.setJob('t3_e2e', { status: 'done', result: 'Looks shaky.', error: null })
+      )
+      .and('five minutes pass', async ({ runner: r }) => {
+        expect(await r.advance('5m')).toEqual(['pdf-review-poll']);
+      })
+      .then('the review is posted on the post', ({ world: w }) => {
+        expect(w.commentsOn('t3_e2e')[0]?.body).toContain('Looks shaky.');
+      })
+      .run();
+  });
+});
+
+// Keep last.
+test('every devvit.json endpoint has a scenario', () => {
+  expectAllEndpointsCovered();
 });

@@ -13,7 +13,9 @@
     "test:supabase": "node supabase/functions/process-review/url-resolution.test.mjs && node supabase/functions/process-review/resolve-guard.test.mjs",
     "test:watch": "vitest",
     "build": "vite build",
-    "dev": "devvit playtest"
+    "dev": "devvit playtest",
+    "harness:sync": "node scripts/sync-test-harness.mjs",
+    "harness:check": "node scripts/sync-test-harness.mjs --check"
   },
   "dependencies": {
     "@devvit/web": "0.15.6",
