@@ -1,152 +1,109 @@
 # Adversarial Review
 
-A [Reddit Devvit](https://developers.reddit.com/docs) Web app. It adds a **"Request Adversarial LLM Review"** post-menu action: a Supabase Edge Function produces a rigorous, LLM-generated physics critique of the post (or of the manuscript it links), and the app posts that critique as a distinguished comment.
+**Rigorous, LLM-powered physics critiques—posted right on your Reddit thread.**
 
-- **Devvit app:** `adversarial-review` · **Baseline version:** `1.0.0` (see the note under Versioning)
-- **Legal:** [Terms](https://allhailseizure.github.io/adversarial-review/terms/) · [Privacy](https://allhailseizure.github.io/adversarial-review/privacy/)
-- Built from [`AllHailSeizure/devvit-app-template`](https://github.com/AllHailSeizure/devvit-app-template). The app was moved out of [`AllHailSeizure/Reddit-Devvit`](https://github.com/AllHailSeizure/Reddit-Devvit) at source commit `649cd2a9e8fece8b3253d373f34ff911e42f931e`. The `adversarial-review/` subfolder history is preserved. The Supabase pieces were copied from `moderator-toolbox/supabase/` at the same commit.
+A [Reddit Devvit](https://developers.reddit.com/docs) app for communities that want fast, structured peer-style feedback on physics posts and linked manuscripts. Readers request a review from the post menu; the bot queues the work and replies with a **distinguished comment** when the review is ready.
 
-## How it works
+<!-- SCREENSHOT: Post menu open on a physics discussion post, with "Request Adversarial LLM Review" highlighted -->
 
-```
-User: post menu → "Request Adversarial LLM Review"
-  │  gates: enabled setting · one review per post (7-day lock) · not removed/spam
-  │         · optional required flair · non-mods: one request per UTC day (bypassed on r/llmphysics_dev)
-  │  0 links  → form "adversarial-no-link" (optional manuscript URL)
-  │  2+ links → form "adversarial-multi-link" (pick one / Other / None)
-  ▼
-POST {supabaseUrl}/rest/v1/review_jobs        (409 = already queued; failure → Redis retry queue)
-  │  DB webhook (migrations 002/004) → Edge Function supabase/functions/process-review
-  │  resolves DOI/Zenodo/landing pages → PDF → Gemini → writes status/result
-  ▼
-Scheduler "pdf-review-poll" (every 5 min)
-  · status=done   → comment result + bot signature, distinguish (sticky optional), lock optional
-  · status=failed → drop job, release the post lock
-  · jobs > 1 h old are dropped; retry queue re-submits every 15 min, up to 3 attempts
-```
+> 📸 Screenshot coming soon: post menu with **Request Adversarial LLM Review** on a community post
 
-## Layout
+<!-- SCREENSHOT: A finished adversarial review comment under a post, with markdown headers and the bot signature -->
 
-| Path | Purpose |
+> 📸 Screenshot coming soon: completed review comment (distinguished) under an OP's post
+
+## What it does
+
+- Adds a **post menu** action: **Request Adversarial LLM Review**
+- Reads your post (and an optional manuscript link), runs an adversarial physics review, and **posts the result as a comment**
+- Handles **DOI, Zenodo, and landing-page links** when a PDF is available; otherwise reviews **post text only**
+- **One review per post** for seven days, with sensible limits so the queue stays fair
+- **Moderators** control whether the feature is on, which flair qualifies, and how the bot's comment appears
+
+## Key features
+
+- **Post-menu review requests** — any eligible user can ask for a critique from the thread itself
+- **Smart link handling** — one link queues automatically; multiple links open a short picker; no links open an optional manuscript URL field
+- **Fair-use gates** — disabled when turned off; blocked on removed/spam posts; optional required post flair
+- **Daily limit for non-moderators** — one request per user per UTC day (moderators are exempt; **r/llmphysics_dev** skips the daily cap for testing)
+- **Async processing** — you get a toast when the job is queued; the comment appears when processing finishes (the app checks for results every five minutes)
+- **Moderator polish** — optional sticky and lock on the review comment; customizable bot signature on every reply
+
+## Install the app on your subreddit
+
+This app is published on Reddit's Devvit platform as **`adversarial-review`**. A subreddit **moderator** installs Devvit apps through Reddit's **moderator tools** and **app management** for the community (see [Reddit's Devvit documentation](https://developers.reddit.com/docs) for the current install flow).
+
+After install:
+
+1. Open the app's **subreddit settings** for your community.
+2. Turn on **Adversarial Reviewer — Enable** (off by default).
+3. Adjust the other subreddit settings below if you want stricter rules or different comment behavior.
+
+> **Note:** **Global** app settings (for example, the Supabase project URL) are configured by whoever operates the hosted app instance, in Devvit’s **global** app settings—not in the subreddit toggles above.
+
+## For moderators — subreddit settings
+
+| Setting | What it does |
 | --- | --- |
-| `src/server/adversarial-reviewer.ts` | Menu, form and scheduler routes, plus the Redis queue logic |
-| `src/server/adversarial-reviewer.test.ts` | Unit tests: gates, forms, Supabase queueing and retry, and the poller (FakeRedditWorld + spied `fetch`; no network) |
-| `supabase/functions/process-review/` | Edge Function (Deno) and its URL-resolution helpers, with `node` tests run by `npm run test:supabase` |
-| `supabase/migrations/001`–`008` | `review_jobs` table, webhook trigger, grants, and `subreddit_name`. The original numbering is kept to match the shared Supabase project's migration history |
-| `supabase/prompts/adversarial_review_prompt.txt` | Live system prompt. It is served from Supabase Storage at `config/system_prompt.txt`, and an optional per-subreddit override can live at `config/system_prompt_<sub>.txt` |
-| `supabase/config.toml` | Supabase CLI config, trimmed to the `process-review` function |
+| **Adversarial Reviewer — Enable** | Master switch. When off, users see *Adversarial reviewer is disabled.* |
+| **Adversarial Reviewer — Required flair template ID** | If set, only posts with that flair can request a review. Leave blank to allow any flair. |
+| **Adversarial Reviewer — Sticky review comment** | Pin the review comment to the top of the post after it is posted. |
+| **Adversarial Reviewer — Lock review comment** | Lock the review comment after posting. |
+| **Bot signature** | Text appended to every bot comment (small-print style). Default: *I am a bot. This action was performed automatically. Contact the moderators if you have questions.* Leave blank for no signature. |
 
-### Redis keys
+## For users — how to request a review
 
-| Key | Purpose |
+1. Open a post in a subreddit where the app is **enabled**.
+2. Open the post **⋯ menu** and choose **Request Adversarial LLM Review**.
+3. Follow any prompts, then wait for the **Review request queued. Please wait.** toast.
+
+### What you might see
+
+| Situation | What happens |
 | --- | --- |
-| `bot:adversarial:lock:{postId}` | One review per post (7-day TTL). Released when a request is refused or a job fails or expires |
-| `bot:adversarial:user:{userId}:{YYYY-MM-DD}` | Per-user daily quota (25 h TTL) |
-| `bot:adversarial:pending-form:{userId}` | Post context held for 5 min while the user fills in a form |
-| `bot:adversarial:pdfjobs` | Sorted set of post IDs waiting on Supabase |
-| `bot:adversarial:retry-queue` | Sorted set of jobs Supabase rejected, scored by their next attempt time |
+| Feature off | *Adversarial reviewer is disabled.* |
+| Post already reviewed (7 days) | *This post has already been reviewed.* |
+| Post removed or spam | *Removed posts cannot be reviewed.* |
+| Wrong flair (when required) | *This post does not have the required flair for a review.* |
+| Daily limit (non-mod) | *You can only request one review per day.* |
+| **No links** in the post | Form: optional **Manuscript URL** (or review post text only) |
+| **Two or more links** | Form: pick a link, **Other** (paste a custom URL), or **None — review post text only** |
+| **Exactly one link** | Queues immediately with that link |
+| Backend busy | *Could not queue right now — will retry automatically.* |
+| Form sat too long | *Form expired. Please try again.* |
 
-### Supabase deployment (manual)
+### Example: post with no external link
 
-The release workflow publishes only the Devvit app. Supabase changes are deployed by hand:
+Use the menu as usual. If the post has no URLs, you may see:
 
-```sh
-npx supabase db push                                   # migrations
-npx supabase functions deploy process-review           # Edge Function (needs GEMINI_API_KEY secret in Supabase)
-npx supabase storage cp supabase/prompts/adversarial_review_prompt.txt ss:///config/system_prompt.txt --experimental
+```
+Manuscript URL (optional)
+If your post is based on an external manuscript, you may submit a link.
+Otherwise, the bot will review your post.
 ```
 
-The Devvit app reads `supabaseUrl`, `supabaseServiceRoleKey` (review jobs), and `supabaseServiceKey` (bot logs) from its global app settings.
+Leave the field empty to review the post body only, or paste a direct link to a paper or PDF.
 
-> **Versioning:** No Devvit release of this app was recorded in this repo's source history (no tag, no release workflow run). `1.0.0` comes from the source `package.json` and is the baseline import version. Confirm it against the Devvit App Store before the first release.
+### Example: post with multiple links
 
----
+You will choose one target:
 
-## Local Commands
-
-```sh
-npm run check       # lint + typecheck + test + vite build
-npm run lint        # ESLint
-npm run typecheck   # tsc --noEmit
-npm test            # Vitest (no Reddit login required)
-npm run test:supabase  # node tests for the process-review Edge Function helpers
-npm run build       # Vite build -> dist/server/index.cjs
-npm run dev         # npx devvit playtest (requires Devvit login)
+```
+Select manuscript link  →  [one of your links | Other | None — review post text only]
+Custom URL              →  (only if you picked Other)
 ```
 
-### No-Login Testing (offline virtual Reddit)
+### When the review appears
 
-`createModTest()` in `src/server/test-harness/` wraps `@devvit/test` with:
+Processing runs in the background. The app looks for finished jobs **every five minutes**. When ready, the bot posts a **distinguished** comment containing the review (plus your configured signature). Stale jobs older than about **one hour** are dropped and the post can be requested again.
 
-- **`FakeRedditWorld`**: subreddits, users (mods, approved, banned, bots), threaded posts and comments, flair, reports, removals and approvals, modmail, wiki pages, mod notes and private messages behind the `reddit.*` API. Every write the app makes is logged (`world.describeActions()`).
-- **`ScenarioRunner`**:
-  - Simulates Reddit activity (`userPosts`, `userComments`, `report`, `modRemoves`, `userModmails`, `install`, …) and fires whichever triggers `devvit.json` declares.
-  - Clicks menus and submits forms as a given user.
-  - Advances a fake clock that runs cron tasks and `scheduler.runJob` jobs.
-  - Offers a `given` / `when` / `then` scenario DSL.
-- **`FakeHttp`**: per-domain `fetch` stubs. An unstubbed call fails the test, so does a host missing from `devvit.json` `permissions.http.domains`, and reddit.com is always blocked.
-- **Coverage**: `expectAllEndpointsCovered()` fails if any declared trigger, menu, form or scheduler endpoint has no scenario.
+On **r/llmphysics_dev**, the per-post lock may clear as soon as the review is posted so you can test again quickly.
 
-See [`src/server/test-harness/README.md`](src/server/test-harness/README.md) for the API and known gaps, and `src/server/adversarial-reviewer.test.ts` for this app's scenarios.
+## Legal
 
-This repo keeps the harness up to date with `npm run harness:sync`. `npm run harness:check` and the weekly `harness-drift` workflow report drift. Do not edit `src/server/test-harness/` here; change it in [devvit-app-template](https://github.com/AllHailSeizure/devvit-app-template) and sync.
+- [Terms of Service](https://allhailseizure.github.io/adversarial-review/terms/)
+- [Privacy Policy](https://allhailseizure.github.io/adversarial-review/privacy/)
 
-> `createModTest()` wraps plain `test(...)` calls only. For parameterised cases, loop over the cases and call `test(...)` for each one: `test.each` / `test.for` bypass the wrapper, so their tests get no `world` or `runner`.
+## License
 
----
-
-## Required GitHub Secret (`DEVVIT_AUTH_TOKEN`)
-
-The tag release workflow requires a repository (or organization) secret named **`DEVVIT_AUTH_TOKEN`** containing the **full raw contents** of your logged-in `~/.devvit/token` file:
-
-```sh
-npx devvit login
-npx devvit whoami
-gh secret set DEVVIT_AUTH_TOKEN < ~/.devvit/token
-```
-
-On Windows PowerShell:
-
-```powershell
-npx devvit whoami
-Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.devvit/token') -Raw |
-  gh secret set DEVVIT_AUTH_TOKEN
-```
-
-> **Security & reliability note:** `DEVVIT_AUTH_TOKEN` is an undocumented CLI environment variable holding your personal Reddit OAuth refresh token — not a scoped CI service account. Keep it strictly on the tag release job (never PR workflows), rotate it if compromised, and note that it can expire or require re-login (`devvit login`) if Reddit invalidates sessions.
-
----
-
-## Versioning & Release Process
-
-### Versioning Rules
-
-- **Strict 3-part SemVer only:** `MAJOR.MINOR.PATCH` (e.g. `1.2.0`). Never use 4-part versions or prerelease suffixes for releases.
-- **Lockstep invariant:** Every release keeps four artifacts identical:
-  1. `package.json` and `package-lock.json` (`"version": "X.Y.Z"`)
-  2. Git tag (`vX.Y.Z`)
-  3. GitHub Release (`vX.Y.Z`)
-  4. Devvit App Store (`X.Y.Z`)
-
-### Running a Release
-
-Releases are tag-triggered. Pushing a `vX.Y.Z` tag runs **Release Devvit app** (`release.yml`), which publishes **that exact tagged commit** to the Devvit App Store. There is no manual publish button.
-
-Only Nate approves releases. Once Nate has approved a release, Devviteloper (Nate's Devvit project-lead bot) pushes the `vX.Y.Z` tag. Devvit PRs may be merged by Nate or Devviteloper. The release workflow does not enforce that approval; it is a process rule.
-
-1. In a PR, bump the version in `package.json` and `package-lock.json` (`npm version X.Y.Z --no-git-tag-version`), merge it to `master` (Nate or Devviteloper may merge), and wait for **CI** (`ci.yml`) to pass.
-2. After Nate has approved the release, Devviteloper tags the merged commit and pushes **only the tag**:
-
-```sh
-git checkout master && git pull
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-git push origin vX.Y.Z
-```
-
-3. The workflow (a thin caller of the shared [`devvit-release.yml`](https://github.com/AllHailSeizure/.github/blob/master/.github/workflows/devvit-release.yml)) checks out the tag's commit and fails before publishing unless the tag is strict SemVer `vX.Y.Z`, the commit is on `master`, and `package.json` and `package-lock.json` already say `X.Y.Z`. It then runs `npm run check`, authenticates via `DEVVIT_AUTH_TOKEN`, runs `npx --no devvit publish --version X.Y.Z` (with `DEVVIT_ALLOW_SOURCE_UPLOAD=1`), asserts the store reports `X.Y.Z`, and creates GitHub Release `vX.Y.Z`. CI never pushes a commit back.
-
-Releases publish as **unlisted**. To publish publicly, change `visibility: unlisted` to `public` in `release.yml`.
-
-If a tag fails validation, nothing was published: delete the tag (`git push origin :refs/tags/vX.Y.Z`), fix the cause, and tag again. One release runs at a time per repository, so push tags one at a time.
-
-> Note: `devvit publish` submits a version to Reddit's Developer Portal. Installing/upgrading on a subreddit (`devvit install`) and deploying any external Supabase migrations/functions remain separate steps.
+This project is licensed under the **MIT License** (Copyright © 2026 Nate Bosma). See [LICENSE](LICENSE) for the full text.
