@@ -39,7 +39,7 @@ After install:
 2. Turn on **Adversarial Reviewer — Enable** (off by default).
 3. Adjust the other subreddit settings below if you want stricter rules or different comment behavior.
 
-> **Note:** **Global** app settings (Supabase project URL and service keys) are set by whoever operates the hosted app instance, in Devvit’s **global** app settings—not in the subreddit toggles above.
+> **Note:** **Global** app settings (for example, the Supabase project URL) are configured by whoever operates the hosted app instance, in Devvit’s **global** app settings—not in the subreddit toggles above.
 
 ## For moderators — subreddit settings
 
